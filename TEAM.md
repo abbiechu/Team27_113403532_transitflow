@@ -9,9 +9,9 @@
 
 | Name | Role | Primary Responsibility | Branch | Status | Start Date |
 |------|------|------------------------|--------|--------|-----------|
-| **irischue1218-code** | Lead (PostgreSQL + Integration) | PostgreSQL schema, pgvector RAG, seeding, system integration | `feature/postgresql` | ✅ In Progress | 2026-05-28 |
-| **[Neo4j Member]** | Neo4j Developer | Neo4j graph design, seeding, Cypher queries | `feature/neo4j` | ⏳ Blocked | Not started |
-| **[Optional: QA]** | Tester | Integration testing, UI validation, mock data verification | `feature/integration` | ⏳ Blocked | Not started |
+| **祝善煦** | (PostgreSQL + Integration) | PostgreSQL schema, system integration | `feature/postgresql` | ✅ In Progress | 2026-05-28 |
+| **劉千** | Neo4j Developer | Neo4j graph design, seeding, Cypher queries | `feature/neo4j` | ⏳ Blocked | Not started |
+| **朱家締** | Tester | Integration testing, UI validation, mock data verification | `feature/integration` | ⏳ Blocked | Not started |
 
 ---
 
