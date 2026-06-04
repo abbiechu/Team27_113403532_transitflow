@@ -9,9 +9,10 @@
 
 | Name | Role | Primary Responsibility | Branch | Status | Start Date |
 |------|------|------------------------|--------|--------|-----------|
-| **祝善煦** | (PostgreSQL + Integration) | PostgreSQL schema, system integration | `feature/postgresql` | ✅ In Progress | 2026-05-28 |
-| **劉千** | Neo4j Developer | Neo4j graph design, seeding, Cypher queries | `feature/neo4j` | ⏳ Blocked | Not started |
-| **朱家締** | Tester | Integration testing, UI validation, mock data verification | `feature/integration` | ⏳ Blocked | Not started |
+| **朱家締** | PostgreSQL schema + seed_postgres.py |  PostgreSQL schema 、seed_postgres.py | `feature/postgresql` | In Progress | ? |
+| **劉千** | Neo4j Developer | Neo4j graph design, seeding, Cypher queries | `feature/neo4j` |  In Progress | ? |
+| **祝善煦** | PostgreSQL擴充 + Integration | databases/relational/queries.py 擴充、pgvector RAG 整合、design document | `feature/design-document` | In Progress | 2026-05-28 |
+
 
 ---
 
