@@ -771,6 +771,8 @@ def store_policy_document(
         with conn.cursor() as cur:
             cur.execute(sql, (title, category, content, vec_str, source_file))
             return cur.fetchone()[0]
+<<<<<<< HEAD
+=======
 
 # ── VECTOR / RAG QUERIES ──────────────────────────────────────────────
 
@@ -812,3 +814,4 @@ def search_policy(query: str, top_k: int = 3) -> list[dict]:
     
     # Step 2: Build SQL for vector similarity search
     sql = \"\"\"\n        SELECT\n            title,\n            category,\n            content,\n            1 - (embedding <=> %s::vector) AS similarity\n        FROM policy_documents\n        WHERE 1 - (embedding <=> %s::vector) > %s\n        ORDER BY embedding <=> %s::vector\n        LIMIT %s\n    \"\"\"\n    \n    # Convert embedding list to vector string for PostgreSQL\n    vec_str = \"[\" + \",\".join(str(x) for x in query_vector) + \"]\"\n    \n    with _connect() as conn:\n        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:\n            cur.execute(sql, (vec_str, vec_str, VECTOR_SIMILARITY_THRESHOLD, vec_str, top_k))\n            return [dict(row) for row in cur.fetchall()]\n```
+>>>>>>> e946d67b808a18ebd721c8ded351506b2c92a77e
