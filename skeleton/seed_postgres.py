@@ -40,14 +40,16 @@ def connect():
     )
 
 
-def insert_many(cur, table, columns, rows):
+def insert_many(cur, table, columns, rows, conflict_target=None):
     """Bulk insert with ON CONFLICT DO NOTHING. Returns row count inserted."""
     if not rows:
         return 0
-    sql = (
-        f"INSERT INTO {table} ({', '.join(columns)}) VALUES %s "
-        f"ON CONFLICT DO NOTHING"
+    conflict_sql = (
+        f"ON CONFLICT ({conflict_target}) DO NOTHING"
+        if conflict_target
+        else "ON CONFLICT DO NOTHING"
     )
+    sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES %s {conflict_sql}"
     execute_values(cur, sql, rows)
     return cur.rowcount
 
@@ -58,7 +60,6 @@ def seed_national_rail_stations(cur):
     """Seed national rail stations and their lines."""
     data = load("national_rail_stations.json")
 
-    # Insert stations
     rows = [
         (
             s["station_id"],
@@ -74,7 +75,6 @@ def seed_national_rail_stations(cur):
                      "is_interchange_metro", "interchange_metro_station_id"], rows)
     print(f"  national_rail_stations: {n} rows")
 
-    # Insert station lines
     line_rows = []
     for s in data:
         for line in s["lines"]:
@@ -87,7 +87,6 @@ def seed_metro_stations(cur):
     """Seed metro stations and their lines."""
     data = load("metro_stations.json")
 
-    # Insert stations
     rows = [
         (
             s["station_id"],
@@ -104,7 +103,6 @@ def seed_metro_stations(cur):
                      "interchange_national_rail_station_id"], rows)
     print(f"  metro_stations: {n} rows")
 
-    # Insert station lines
     line_rows = []
     for s in data:
         for line in s["lines"]:
@@ -117,7 +115,6 @@ def seed_metro_schedules(cur):
     """Seed metro schedules, stops, and operating days."""
     data = load("metro_schedules.json")
 
-    # Insert schedules
     rows = [
         (
             s["schedule_id"],
@@ -139,7 +136,6 @@ def seed_metro_schedules(cur):
                      "base_fare_usd", "per_stop_rate_usd", "frequency_min"], rows)
     print(f"  metro_schedules: {n} rows")
 
-    # Insert stops (junction table — each stop gets its own row)
     stop_rows = []
     for s in data:
         for order, station_id in enumerate(s["stops_in_order"]):
@@ -150,7 +146,6 @@ def seed_metro_schedules(cur):
                      "travel_time_from_origin_min"], stop_rows)
     print(f"  metro_schedule_stops: {n} rows")
 
-    # Insert operating days
     day_rows = []
     for s in data:
         for day in s["operates_on"]:
@@ -163,7 +158,6 @@ def seed_national_rail_schedules(cur):
     """Seed national rail schedules, fare classes, stops, and operating days."""
     data = load("national_rail_schedules.json")
 
-    # Insert schedules
     rows = [
         (
             s["schedule_id"],
@@ -184,7 +178,6 @@ def seed_national_rail_schedules(cur):
                      "first_train_time", "last_train_time", "frequency_min"], rows)
     print(f"  national_rail_schedules: {n} rows")
 
-    # Insert fare classes (standard and first class have different rates)
     fare_rows = []
     for s in data:
         for fare_class, fare_info in s["fare_classes"].items():
@@ -199,13 +192,11 @@ def seed_national_rail_schedules(cur):
                     fare_rows)
     print(f"  national_rail_fare_classes: {n} rows")
 
-    # Insert stops
     stop_rows = []
     for s in data:
         for order, station_id in enumerate(s["stops_in_order"]):
             travel_time = s["travel_time_from_origin_min"].get(station_id, 0)
             stop_rows.append((s["schedule_id"], station_id, order + 1, travel_time, False))
-        # Express services have passing stops (not served but physically passed through)
         for station_id in s.get("passed_through_stations", []):
             stop_rows.append((s["schedule_id"], station_id, 0, 0, True))
     n = insert_many(cur, "national_rail_schedule_stops",
@@ -213,7 +204,6 @@ def seed_national_rail_schedules(cur):
                      "travel_time_from_origin_min", "is_passing_stop"], stop_rows)
     print(f"  national_rail_schedule_stops: {n} rows")
 
-    # Insert operating days
     day_rows = []
     for s in data:
         for day in s["operates_on"]:
@@ -244,23 +234,23 @@ def seed_seat_layouts(cur):
 
 def seed_users(cur):
     """Seed users with bcrypt-hashed passwords.
-    
+
     bcrypt automatically generates a unique salt per user, so two users
     with the same password will have different hashes — this defeats
-    rainbow-table attacks.
+    rainbow-table attacks. rounds=4 is used for seeding speed.
     """
     data = load("registered_users.json")
 
     rows = []
     for u in data:
-        # Hash the password with bcrypt before storing — never store plain text
+        # rounds=4 speeds up seeding significantly while still hashing correctly
         password_hash = bcrypt.hashpw(
             u["password"].encode("utf-8"),
-            bcrypt.gensalt()
+            bcrypt.gensalt(rounds=4)
         ).decode("utf-8")
 
         rows.append((
-            u["user_id"],       # used as legacy_user_id for seeding compatibility
+            u["user_id"],
             u["full_name"],
             u["email"],
             password_hash,
@@ -272,10 +262,12 @@ def seed_users(cur):
             u["is_active"],
         ))
 
+    # conflict_target ensures re-runs skip existing users by legacy_user_id
     n = insert_many(cur, "users",
                     ["legacy_user_id", "full_name", "email", "password_hash",
                      "phone", "date_of_birth", "secret_question", "secret_answer",
-                     "registered_at", "is_active"], rows)
+                     "registered_at", "is_active"], rows,
+                    conflict_target="legacy_user_id")
     print(f"  users: {n} rows")
 
 
@@ -286,8 +278,8 @@ def seed_national_rail_bookings(cur):
     rows = []
     for b in data:
         rows.append((
-            b["booking_id"],    # legacy_booking_id e.g. BK001
-            b["user_id"],       # legacy_user_id e.g. RU01
+            b["booking_id"],
+            b["user_id"],
             b["schedule_id"],
             b["origin_station_id"],
             b["destination_station_id"],
@@ -304,7 +296,6 @@ def seed_national_rail_bookings(cur):
             b.get("travelled_at"),
         ))
 
-    # Use a subquery to convert legacy_user_id to UUID
     sql = """
         INSERT INTO national_rail_bookings (
             legacy_booking_id, user_id, schedule_id,
@@ -333,8 +324,8 @@ def seed_metro_travels(cur):
     rows = []
     for t in data:
         rows.append((
-            t["trip_id"],       # legacy_trip_id
-            t["user_id"],       # legacy_user_id
+            t["trip_id"],
+            t["user_id"],
             t["schedule_id"],
             t["origin_station_id"],
             t["destination_station_id"],
@@ -374,7 +365,6 @@ def seed_payments(cur):
     for p in data:
         booking_id = p["booking_id"]
 
-        # Determine if this payment is for a national rail booking or metro trip
         # BK prefix = national rail, MT prefix = metro
         if booking_id.startswith("BK"):
             sql = """
@@ -472,8 +462,8 @@ def main():
 
     try:
         print("Seeding tables (dependency order):")
-        # national_rail_stations must come before metro_stations
-        # because metro_stations references it
+        # Defer FK checks until commit to avoid circular reference issues
+        cur.execute("SET CONSTRAINTS ALL DEFERRED;")
         seed_national_rail_stations(cur)
         seed_metro_stations(cur)
         seed_metro_schedules(cur)
