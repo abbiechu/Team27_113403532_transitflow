@@ -25,8 +25,7 @@
 The diagram below was produced using dbdiagram.io. Cardinality notation follows crow's foot convention (`||--o{` = one-to-many, `||--||` = one-to-one, `|o--o|` = optional).
 
 > **Note for markers:** A rendered version of this diagram is available at:  
-> `https://dbdiagram.io/d/transitflow-schema` *(replace with your actual shared link before submission)*  
-> The full DBML source is reproduced below so the schema can be verified without visiting the link.
+> `[https://dbdiagram.io/d/transitflow-schema](https://dbdiagram.io/d/6a2a65825c789b8acb5e53bb)` 
 
 ```dbml
 // dbdiagram.io source — paste at https://dbdiagram.io to render
