@@ -28,8 +28,6 @@ The diagram below was produced using dbdiagram.io. Cardinality notation follows 
 > `[https://dbdiagram.io/d/transitflow-schema](https://dbdiagram.io/d/6a2a65825c789b8acb5e53bb)` 
 
 ```dbml
-// dbdiagram.io source — paste at https://dbdiagram.io to render
-// Schema matches databases/relational/schema.sql exactly.
 
 Table users {
   // UUID chosen over SERIAL: user_id appears in auth tokens and API responses.
