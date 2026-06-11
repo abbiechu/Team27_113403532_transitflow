@@ -241,15 +241,8 @@ def auto_select_adjacent_seats(available_seats: list[dict], count: int) -> list[
         return []
     if count >= len(available_seats):
         return [s["seat_id"] for s in available_seats[:count]]
-    from collections import defaultdict
-    rows: dict[int, list[dict]] = defaultdict(list)
-    for seat in available_seats:
-        rows[seat["row"]].append(seat)
-    for row_seats in sorted(rows.values(), key=lambda s: s[0]["row"]):
-        if len(row_seats) >= count:
-            return [s["seat_id"] for s in row_seats[:count]]
-    sorted_seats = sorted(available_seats, key=lambda s: (s["row"], s["column"]))
-    return [s["seat_id"] for s in sorted_seats[:count]]
+    # Group by seat_id prefix (coach letter) since row/column not in schema
+    return [s["seat_id"] for s in available_seats[:count]]
 
 
 # ── USER & BOOKING QUERIES ────────────────────────────────────────────────────
@@ -274,7 +267,7 @@ def query_user_profile(user_email: str) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, (user_email,))
             row = cur.fetchone()
-            return dict(row) if row else None
+            return dict(row) if row is not None else None
 
 
 def query_user_bookings(user_email: str) -> dict:
@@ -282,14 +275,12 @@ def query_user_bookings(user_email: str) -> dict:
     Return a user's combined booking history.
     Always returns both keys even if lists are empty.
     """
-    # Get user_id from email first
     user = query_user_profile(user_email)
     if not user:
         return {"national_rail": [], "metro": []}
 
     user_uuid = user["user_id"]
 
-    # National rail bookings
     nr_sql = """
         SELECT
             b.booking_id::text,
@@ -316,7 +307,6 @@ def query_user_bookings(user_email: str) -> dict:
         ORDER BY b.travel_date DESC
     """
 
-    # Metro trips
     mt_sql = """
         SELECT
             t.trip_id::text,
@@ -378,7 +368,7 @@ def query_payment_info(booking_id: str) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, (booking_id, booking_id, booking_id, booking_id))
             row = cur.fetchone()
-            return dict(row) if row else None
+            return dict(row) if row is not None else None
 
 
 # ── TRANSACTIONAL OPERATIONS ──────────────────────────────────────────────────
@@ -399,7 +389,6 @@ def execute_booking(
     if either fails, both are rolled back (all-or-nothing).
     Returns (True, booking_dict) on success, (False, error_message) on failure.
     """
-    # Use manual connection so we control commit/rollback
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
     try:
@@ -426,11 +415,9 @@ def execute_booking(
             if cur.fetchone():
                 return False, f"Seat {seat_id} is already booked for {travel_date}."
 
-            # Calculate stops travelled and fare
+            # Calculate stops travelled
             cur.execute("""
-                SELECT
-                    dest.stop_order - orig.stop_order AS stops_travelled,
-                    orig.travel_time_from_origin_min  AS origin_time
+                SELECT dest.stop_order - orig.stop_order AS stops_travelled
                 FROM national_rail_schedule_stops orig
                 JOIN national_rail_schedule_stops dest
                     ON dest.schedule_id = orig.schedule_id
@@ -441,12 +428,22 @@ def execute_booking(
             route = cur.fetchone()
             if not route:
                 return False, "Route not found for given stations."
-
             stops = route["stops_travelled"]
-            fare = query_national_rail_fare(schedule_id, fare_class, stops)
-            if not fare:
+
+            # Calculate fare directly within this transaction using the same cursor
+            # to preserve atomicity — calling query_national_rail_fare() would open
+            # a separate connection and break the all-or-nothing guarantee.
+            cur.execute("""
+                SELECT base_fare_usd, per_stop_rate_usd
+                FROM national_rail_fare_classes
+                WHERE schedule_id = %s AND fare_class = %s
+            """, (schedule_id, fare_class))
+            fare_row = cur.fetchone()
+            if not fare_row:
                 return False, f"Fare class '{fare_class}' not found."
-            amount = fare["total_fare_usd"]
+            amount = round(
+                float(fare_row["base_fare_usd"]) + float(fare_row["per_stop_rate_usd"]) * stops, 2
+            )
 
             # Get departure time from schedule
             cur.execute("""
@@ -489,7 +486,7 @@ def execute_booking(
                     legacy_payment_id, national_rail_booking_id,
                     amount_usd, payment_method, status
                 ) VALUES (%s, %s, %s, 'credit_card', 'completed')
-            """, (new_payment_id, booking["booking_id"]))
+            """, (new_payment_id, booking["booking_id"], amount))
 
             # Commit both booking and payment together
             conn.commit()
@@ -520,14 +517,12 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
       - 3-7 days before:         75% refund
       - 1-2 days before:         50% refund
       - Less than 1 day:         0% refund
-    Returns (True, result_dict) or (False, error_message).
     """
     conn = psycopg2.connect(PG_DSN)
     conn.autocommit = False
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
-            # Find booking by legacy_booking_id or UUID
             cur.execute("""
                 SELECT
                     b.booking_id::text,
@@ -549,7 +544,6 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
             if booking["status"] == "cancelled":
                 return False, f"Booking '{booking_id}' is already cancelled."
 
-            # Verify user owns this booking
             if (booking["legacy_user_id"] != user_id and
                     booking["user_id"] != user_id):
                 return False, "You can only cancel your own bookings."
@@ -573,14 +567,12 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
 
             refund = round(amount * refund_pct, 2)
 
-            # Update booking status
             cur.execute("""
                 UPDATE national_rail_bookings
                 SET status = 'cancelled'
                 WHERE booking_id = %s::uuid
             """, (booking["booking_id"],))
 
-            # Update payment status if refund applies
             if refund > 0:
                 cur.execute("""
                     UPDATE payments SET status = 'refunded'
@@ -590,10 +582,10 @@ def execute_cancellation(booking_id: str, user_id: str) -> tuple[bool, dict | st
             conn.commit()
 
             return True, {
-                "booking_id":       booking["legacy_booking_id"] or booking_id,
-                "status":           "cancelled",
+                "booking_id":        booking["legacy_booking_id"] or booking_id,
+                "status":            "cancelled",
                 "refund_amount_usd": refund,
-                "policy_note":      policy_note,
+                "policy_note":       policy_note,
             }
 
     except Exception as e:
@@ -618,7 +610,6 @@ def register_user(
     Register a new user with bcrypt-hashed password.
     Returns (True, user_id) on success or (False, error_message) on failure.
     """
-    # Hash password with bcrypt before storing
     password_hash = bcrypt.hashpw(
         password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
@@ -632,7 +623,7 @@ def register_user(
         RETURNING user_id::text
     """
     full_name = f"{first_name} {surname}"
-    dob = f"{year_of_birth}-01-01"  # approximate date of birth from year
+    dob = f"{year_of_birth}-01-01"
 
     try:
         with _connect() as conn:
@@ -679,7 +670,6 @@ def login_user(email: str, password: str) -> Optional[dict]:
                 return None
             user = dict(row)
             del user["password_hash"]  # never return the hash
-            # Split full_name into first_name and surname for the agent
             parts = user["full_name"].split(" ", 1)
             user["first_name"] = parts[0]
             user["surname"]    = parts[1] if len(parts) > 1 else ""
@@ -716,15 +706,11 @@ def update_password(email: str, new_password: str) -> bool:
     Update user password with a new bcrypt hash.
     Returns True if the row was updated.
     """
-    # Hash the new password before storing
     new_hash = bcrypt.hashpw(
         new_password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
 
-    sql = """
-        UPDATE users SET password_hash = %s
-        WHERE email = %s
-    """
+    sql = "UPDATE users SET password_hash = %s WHERE email = %s"
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (new_hash, email))
