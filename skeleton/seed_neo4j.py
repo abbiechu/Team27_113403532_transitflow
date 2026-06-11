@@ -30,6 +30,8 @@ def seed():
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     with driver.session() as session:
 
+        # Wipe the graph before reseeding: combined with MERGE below, this makes
+        # re-running the script idempotent (clean rebuild, never duplicates).
         session.run("MATCH (n) DETACH DELETE n")
         print("  Cleared existing graph data")
 
@@ -70,6 +72,9 @@ def seed():
         print(f"  Created {len(rail_stations)} NationalRailStation nodes")
 
         # ── 建立 Metro 路線連結 (METRO_LINK) ─────────────────────────
+        # Fare fields are fixed per relationship (rather than per schedule) so
+        # apoc.algo.dijkstra has a single numeric weight to optimise on; the
+        # schedule-level fare classes used by PostgreSQL are not graph concerns.
         metro_link_count = 0
         for s in metro_stations:
             for adj in s.get("adjacent_stations", []):
@@ -111,6 +116,9 @@ def seed():
         print(f"  Created {rail_link_count} RAIL_LINK relationships")
 
         # ── 建立 Metro ↔ Rail 轉乘連結 (INTERCHANGE_TO) ──────────────
+        # Created in both directions: route queries follow directed
+        # relationships, and a journey may start on either network, so
+        # shortestPath needs an INTERCHANGE_TO edge usable from either side.
         interchange_count = 0
         for s in metro_stations:
             if s["is_interchange_national_rail"] and s.get("interchange_national_rail_station_id"):
