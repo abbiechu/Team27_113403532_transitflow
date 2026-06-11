@@ -27,6 +27,9 @@ def example_count_nodes() -> int:
             result = session.run("MATCH (n) RETURN count(n) AS total")
             return result.single()["total"]
         
+# Station IDs encode their network ("MS" = metro, "NR" = national rail), so the
+# label/relationship type can be derived from the ID instead of an extra lookup
+# or a "network" argument that callers would have to get right.
 def _infer_label(station_id: str) -> str:
     """MS01 → MetroStation，NR01 → NationalRailStation"""
     if station_id.upper().startswith("MS"):
@@ -66,6 +69,9 @@ def query_shortest_route(
     label = _infer_label(origin_id)
     link  = _infer_link(origin_id)
 
+    # Cypher cannot bind parameters to node labels or relationship types, so the
+    # inferred label/link names are interpolated into the query string. Both come
+    # from a closed set of trusted constants (_infer_label/_infer_link), not user input.
     cypher = f"""
         MATCH (start:{label} {{station_id: $origin_id}})
         MATCH (end:{label}   {{station_id: $destination_id}})
@@ -113,19 +119,11 @@ def query_cheapest_route(
 
     Returns:
         dict with found, total_fare_usd (approximate), stations, legs
-    Find the cheapest path between two stations, minimising total estimated fare.
-
-    Args:
-        origin_id:       e.g. "NR01"
-        destination_id:  e.g. "NR05"
-        network:         "metro", "rail", or "auto"
-        fare_class:      "standard" or "first" (national rail only)
-
-    Returns:
-        dict with found, total_fare_usd (approximate), stations, legs
     """
     label     = _infer_label(origin_id)
     link      = _infer_link(origin_id)
+    # Metro fares are a flat per-stop rate, while national rail fares vary by
+    # class (standard/first), so the Dijkstra weight property differs by network.
     fare_prop = "first_fare_usd" if fare_class == "first" else "standard_fare_usd"
     if label == "MetroStation":
         fare_prop = "per_stop_rate_usd"
@@ -182,6 +180,10 @@ def query_alternative_routes(
     label = _infer_label(origin_id)
     link  = _infer_link(origin_id)
 
+    # *..15 caps the search depth so shortestPath doesn't traverse the whole
+    # graph looking for a path on a disconnected/avoid-blocked network.
+    # The avoid filter is applied to the path itself (not post-filtered in
+    # Python) so the alternative is guaranteed not to pass through that station.
     cypher = f"""
         MATCH (start:{label} {{station_id: $origin_id}})
         MATCH (end:{label}   {{station_id: $destination_id}})
@@ -230,6 +232,8 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
     origin_link  = _infer_link(origin_id)
     dest_link    = _infer_link(destination_id)
 
+    # The relationship-type union (origin_link|INTERCHANGE_TO|dest_link) lets
+    # shortestPath cross from one network to the other via an interchange edge.
     cypher = f"""
         MATCH (start:{origin_label} {{station_id: $origin_id}})
         MATCH (end:{dest_label}     {{station_id: $destination_id}})
@@ -245,7 +249,7 @@ def query_interchange_path(origin_id: str, destination_id: str) -> dict:
             [rel  IN relationships(path) | {{
                 type: type(rel),
                 line: rel.line,
-                travel_time_min: coalesce(rel.travel_time_min, r.transfer_time_min, 0)
+                travel_time_min: coalesce(rel.travel_time_min, rel.transfer_time_min, 0)
             }}] AS legs,
             total_time AS total_time_min
         ORDER BY total_time
@@ -277,26 +281,31 @@ def query_delay_ripple(delayed_station_id: str, hops: int = 2) -> list[dict]:
         hops:               how many connections out to search
 
     Returns:
-        List of dicts: {station_id, name, network}
+        List of dicts: {station_id, name, network, hops_away}
     """
-    cypher = """
-        MATCH (start {station_id: $station_id})
-        MATCH (start)-[*1..$hops]->(affected)
+    # Neo4j does not allow a parameter to set a variable-length relationship
+    # bound, so the validated hop count is interpolated directly into the Cypher.
+    cypher = f"""
+        MATCH (start {{station_id: $station_id}})
+        MATCH p = (start)-[*1..{int(hops)}]->(affected)
         WHERE affected.station_id <> $station_id
-        RETURN DISTINCT
+        WITH affected, min(length(p)) AS hops_away
+        RETURN
             affected.station_id AS station_id,
             affected.name       AS name,
-            labels(affected)[0] AS network
-        ORDER BY station_id
+            labels(affected)[0] AS network,
+            hops_away
+        ORDER BY hops_away, station_id
     """
     with _driver() as driver:
         with driver.session() as session:
-            results = session.run(cypher, station_id=delayed_station_id, hops=hops)
+            results = session.run(cypher, station_id=delayed_station_id)
             return [
                 {
                     "station_id": r["station_id"],
                     "name":       r["name"],
                     "network":    r["network"],
+                    "hops_away":  r["hops_away"],
                 }
                 for r in results
             ]
